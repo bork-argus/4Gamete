@@ -12,37 +12,18 @@
 // Command line options
 static char l_no_output = 0;
 
+#define LOCUS_INDEX_CHUNK		(1024)
+typedef struct {
+	unsigned long			match_index[LOCUS_INDEX_CHUNK];
+	unsigned short			num_matches;
+	struct LocusMatches		*next_chunk;
+} LocusMatches;
+
 typedef struct {
 	char 				locusName[128];
 	unsigned long long 	allele[MAX_ALLELE_ELEMENTS];	// alleles array. Each element represents 64 alleles.
+	LocusMatches		*matches;
 } Locus;
-
-/*
-int uniquePairs(unsigned long p1, unsigned long p2)
-{
-	unsigned char uniques[4] = { 0, 0, 0, 0 };
-
-	register unsigned long bitMask = 1UL;
-	for (unsigned short i = 0; i < 24; i++)
-	{
-		register unsigned long p1_bit = p1 & bitMask;
-		register unsigned long p2_bit = p2 & bitMask;
-
-		if (p1_bit && p2_bit)
-			uniques[0] = 1;
-		else if (p1_bit)
-			uniques[1] = 1;
-		else if (p2_bit)
-			uniques[2] = 1;
-		else
-			uniques[3] = 1;
-
-		bitMask <<= 1;
-	}
-
-	return uniques[0] + uniques[1] + uniques[2] + uniques[3];
-}
-*/
 
 unsigned short uniquePairsViaLocus2(const Locus *locus1, const Locus *locus2, const unsigned short numBits)
 {
@@ -304,6 +285,8 @@ Locus parseLocus(const char *locusLine)
 {
 	Locus locus;
 
+	locus.matches = NULL;
+
 	register const char *p = locusLine;
 	register char *ln = locus.locusName;
 
@@ -331,6 +314,45 @@ Locus parseLocus(const char *locusLine)
 	}
 
 	return locus;
+}
+
+/// @brief Adds a matching index to locus.
+/// @param locus Locus structure to add match_index to
+/// @param match_index Macthing index
+void AddMatch(Locus *locus, unsigned long match_index)
+{
+	LocusMatches *p = locus->matches;
+
+	// if this is the first time through, allocate the first match structure.
+	if (p == NULL)
+	{
+		p = calloc(1, sizeof(LocusMatches));
+		locus->matches = p;
+	}
+
+	// walk the matches list until we find either a structure with room,
+	// or a structure with no room and a NULL pointer.
+	// if there is room, then just add the value into the existing match structure,
+	// if there isn't room, then allocate a new one and add it in.
+	while (p)
+	{
+		// Not full of match indices? Add her in and move on.
+		if (p->num_matches < LOCUS_INDEX_CHUNK)
+		{
+			p->match_index[p->num_matches] = match_index;
+			p->num_matches++;
+			break;
+		}
+		else
+		{
+			// walk to the next one, if we are at the end, allocate a new one and 
+			// add it into the list and then keep going.
+			if (p->next_chunk == NULL)
+				p->next_chunk = calloc(1, sizeof(LocusMatches));
+			
+			p = (LocusMatches *) p->next_chunk;
+		}
+	}
 }
 
 int main(int argc, char* argv[])
@@ -425,7 +447,6 @@ int main(int argc, char* argv[])
 	/* samples are in samples[] ... run a double loop to compare */
 	/* ns holds the number of samples read */
 	
-	unsigned long uniques = 0;
 	fprintf(stderr, "Processing %ld samples\n", ns);
 	for (unsigned long int row = 0; row < ns - 1; row++)
 	{
@@ -436,18 +457,33 @@ int main(int argc, char* argv[])
 		{
 			if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
 			{
+				AddMatch(&(samples[row]), cmp_row);
+			}
+		}
+	}
+
+	// Walk the locus list and print matches (if output is allowed)
+	unsigned long uniques = 0;
+	for (register unsigned long locus_index = 0; locus_index < numLoci; locus_index++)
+	{
+		LocusMatches *p = samples[locus_index].matches;
+		while (p)
+		{
+			for (register unsigned short i = 0; i < p->num_matches; i++)
+			{
 				uniques++;
 				if (!l_no_output)
 				{
 					printf("%s %s\n", 
-							samples[row].locusName, samples[cmp_row].locusName);
+							samples[locus_index].locusName, samples[i].locusName);
 				}
 			}
+
+			p = (LocusMatches *) p->next_chunk;
 		}
 	}
 
 	fprintf(stderr, "\nFound %ld sample matches\n", uniques);
 
     return 0;
-
 }
