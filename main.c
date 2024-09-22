@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/time.h>
 
 // Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
 #define MAX_ALLELE_ELEMENTS		(2)
@@ -13,8 +14,8 @@
 #define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
 
 // Command line options
-static char l_no_output = 0;
-static short l_num_threads = 1;
+static unsigned char l_no_output = 0;
+static unsigned short l_num_threads = 1;
 
 #define LOCUS_INDEX_CHUNK		(1024)
 typedef struct {
@@ -271,7 +272,7 @@ unsigned short numAlleles(const char *locusLine)
 	for (register const char *p = locusLine; *p; p++)
 	{
 		// find first separator between the locus name and the alleles
-		if (*p == ' ' || *p == '	')
+		if (*p == ' ' || *p == '\t')
 			latch = 0x01;
 
 		// count how many alleles we see, but only after the locus name
@@ -364,6 +365,8 @@ typedef struct {
 	Locus 			*samples;
 	unsigned long 	num_samples;
 	unsigned short	num_alleles;
+	unsigned long	current_row;
+	pthread_mutex_t current_row_mutex;
 } ThreadArgs;
 
 /// @brief Thread to process loci rows
@@ -373,22 +376,44 @@ void *processLoci(void *arg)
 {
 	ThreadArgs *args = (ThreadArgs *) arg;
 
+	const unsigned long process_rows = 100;
+
 	Locus *samples = args->samples;
-	unsigned long ns = args->num_samples;
+	unsigned long total_samples = args->num_samples;
 	unsigned short nAlleles = args->num_alleles;
+	pthread_mutex_t *mutex = &(args->current_row_mutex);
 
-	for (unsigned long int row = 0; row < ns - 1; row++)
+	while (1)
 	{
-		if (row % 100 == 0)
-			fprintf(stderr, ".");
+		// only one thread can access current_row at a time
+		// Everything else during processing ought to be thread safe.
+		pthread_mutex_lock(mutex);
+		unsigned long start_row = args->current_row;
+		args->current_row += process_rows;
+		pthread_mutex_unlock(mutex);
 
-		for (unsigned long int cmp_row = row + 1; cmp_row < ns; cmp_row++)
+		/* if the thread detects we are done ... exit */
+		if (start_row >= total_samples - 1)
+			break;
+
+		// calculate the last row to process. If we fall off the end, adjust
+		unsigned long end_row = start_row + process_rows;
+		if (end_row > total_samples - 1)
+			end_row = total_samples - 1;
+
+		for (register unsigned long row = start_row; row < end_row; row++)
 		{
-			if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+			for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
 			{
-				AddMatch(&(samples[row]), cmp_row);
+				if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+				{
+					AddMatch(&(samples[row]), cmp_row);
+				}				
 			}
 		}
+
+		// print progress every process_rows lines
+		fprintf(stderr, ".");
 	}
 
 	return NULL;
@@ -491,41 +516,43 @@ int main(int argc, char* argv[])
 	
 	fprintf(stderr, "Processing %ld samples\n", ns);
 
+	struct timeval t0, t1;
+
+	gettimeofday(&t0, NULL);
+
 	// peel off a thread to handle the comparisons
-	pthread_t thread;
+	pthread_t *thread = calloc(l_num_threads, sizeof(pthread_t));
 
 	ThreadArgs thread_args;
 	thread_args.num_alleles = nAlleles;
 	thread_args.num_samples = ns;
 	thread_args.samples = samples;
+	thread_args.current_row = 0;
+	pthread_mutex_init(&(thread_args.current_row_mutex), NULL);
 
-	int err = pthread_create(&thread, NULL, 
-							 &processLoci, &thread_args);
-	if (err != 0)
-		printf("\ncan't create thread :[%s]", strerror(err));
-	else
-		printf("\n Thread created successfully\n");
-
-
-	// wait for the thread to finish
-	pthread_join(thread, NULL);
-
-	/*
-	for (unsigned long int row = 0; row < ns - 1; row++)
+	for (unsigned short i = 0; i < l_num_threads; i++)
 	{
-		if (row % 100 == 0)
-			fprintf(stderr, ".");
-
-		for (unsigned long int cmp_row = row + 1; cmp_row < ns; cmp_row++)
-		{
-			if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
-			{
-				AddMatch(&(samples[row]), cmp_row);
-			}
-		}
+		int err = pthread_create(&(thread[i]), NULL, 
+								&processLoci, &thread_args);
+		if (err != 0)
+			fprintf(stderr, "\n Can't create thread :[%s]", strerror(err));
+		else
+			fprintf(stderr, "\n Thread created successfully\n");
 	}
-	*/
 
+	// wait for all the threads to finish
+	for (unsigned short i = 0; i < l_num_threads; i++)
+	{
+		pthread_join(thread[i], NULL);
+	}
+
+	free(thread);
+
+	gettimeofday(&t1, NULL);
+	double elapsed = (double)(t1.tv_usec - t0.tv_usec) / 1000000 + (double)(t1.tv_sec - t0.tv_sec);
+	fprintf(stderr, "\n\nElapsed time to perform comparisons: %f seconds\n", elapsed);
+
+	gettimeofday(&t0, NULL);
 	// Walk the locus list and print matches (if output is allowed)
 	unsigned long uniques = 0;
 	for (register unsigned long locus_index = 0; locus_index < numLoci; locus_index++)
@@ -540,13 +567,18 @@ int main(int argc, char* argv[])
 				{
 					unsigned long match_index = p->match_index[i];
 					printf("%s %s\n", 
-							samples[locus_index].locusName, samples[match_index].locusName);
+							samples[locus_index].locusName, 
+							samples[match_index].locusName);
 				}
 			}
 
 			p = (LocusMatches *) p->next_chunk;
 		}
 	}
+
+	gettimeofday(&t1, NULL);
+	elapsed = (double)(t1.tv_usec - t0.tv_usec) / 1000000 + (double)(t1.tv_sec - t0.tv_sec);
+	fprintf(stderr, "\nElapsed time to write results: %f seconds\n", elapsed);
 
 	fprintf(stderr, "\nFound %ld sample matches\n", uniques);
 
