@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -7,6 +8,9 @@
 #define NUM_BITS_PER_BYTE		(8)
 #define NUM_BITS_PER_ELEMENT	(sizeof(unsigned long long) * NUM_BITS_PER_BYTE)
 #define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
+
+// Command line options
+static char l_no_output = 0;
 
 typedef struct {
 	char 				locusName[128];
@@ -331,15 +335,38 @@ Locus parseLocus(const char *locusLine)
 
 int main(int argc, char* argv[])
 {
+    int c;
+    extern char *optarg;
+    extern int optind, opterr, optopt;
+
+    opterr = 0; // disable error messages
+
+    while ((c = getopt(argc, argv, "n")) != -1) {
+        switch (c) {
+			case 'n':
+				l_no_output = 1;
+				break;
+			case '?':
+				printf("Unknown option %c\n", optopt);
+				break;
+        }
+    }
+
 	// char const* const fileName = "binary_alleles_per_var.txt";
-	if (argc < 2)
+	if (argc <= optind)
 	{
 		fprintf(stderr, "Usage: %s <input allele file data>\n", argv[0]);
 		exit(-1);
 	}
 
-    char const* const fileName = argv[1];
+    char const* const fileName = argv[optind];
 	FILE* file = fopen(fileName, "r"); /* should check the result */
+	if (file == NULL)
+	{
+		fprintf(stderr, "Could not open input file: %s\n", fileName);
+		exit(-1);
+	}
+
 	char line[256];
 	char filename[128];
 
@@ -410,8 +437,11 @@ int main(int argc, char* argv[])
 			if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
 			{
 				uniques++;
-				printf("%s %s\n", 
-						samples[row].locusName, samples[cmp_row].locusName);
+				if (!l_no_output)
+				{
+					printf("%s %s\n", 
+							samples[row].locusName, samples[cmp_row].locusName);
+				}
 			}
 		}
 	}
