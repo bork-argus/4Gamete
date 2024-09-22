@@ -1,6 +1,9 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <errno.h>
+#include <string.h>
 
 // Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
 #define MAX_ALLELE_ELEMENTS		(2)
@@ -11,6 +14,7 @@
 
 // Command line options
 static char l_no_output = 0;
+static short l_num_threads = 1;
 
 #define LOCUS_INDEX_CHUNK		(1024)
 typedef struct {
@@ -355,6 +359,41 @@ void AddMatch(Locus *locus, unsigned long match_index)
 	}
 }
 
+// Local variables for thread processing
+typedef struct {
+	Locus 			*samples;
+	unsigned long 	num_samples;
+	unsigned short	num_alleles;
+} ThreadArgs;
+
+/// @brief Thread to process loci rows
+/// @param arg 
+/// @return 
+void *processLoci(void *arg)
+{
+	ThreadArgs *args = (ThreadArgs *) arg;
+
+	Locus *samples = args->samples;
+	unsigned long ns = args->num_samples;
+	unsigned short nAlleles = args->num_alleles;
+
+	for (unsigned long int row = 0; row < ns - 1; row++)
+	{
+		if (row % 100 == 0)
+			fprintf(stderr, ".");
+
+		for (unsigned long int cmp_row = row + 1; cmp_row < ns; cmp_row++)
+		{
+			if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+			{
+				AddMatch(&(samples[row]), cmp_row);
+			}
+		}
+	}
+
+	return NULL;
+}
+
 int main(int argc, char* argv[])
 {
     int c;
@@ -363,10 +402,13 @@ int main(int argc, char* argv[])
 
     opterr = 0; // disable error messages
 
-    while ((c = getopt(argc, argv, "n")) != -1) {
+    while ((c = getopt(argc, argv, "nj:")) != -1) {
         switch (c) {
 			case 'n':
 				l_no_output = 1;
+				break;
+			case 'j':
+				l_num_threads = atoi(optarg);
 				break;
 			case '?':
 				printf("Unknown option %c\n", optopt);
@@ -448,6 +490,27 @@ int main(int argc, char* argv[])
 	/* ns holds the number of samples read */
 	
 	fprintf(stderr, "Processing %ld samples\n", ns);
+
+	// peel off a thread to handle the comparisons
+	pthread_t thread;
+
+	ThreadArgs thread_args;
+	thread_args.num_alleles = nAlleles;
+	thread_args.num_samples = ns;
+	thread_args.samples = samples;
+
+	int err = pthread_create(&thread, NULL, 
+							 &processLoci, &thread_args);
+	if (err != 0)
+		printf("\ncan't create thread :[%s]", strerror(err));
+	else
+		printf("\n Thread created successfully\n");
+
+
+	// wait for the thread to finish
+	pthread_join(thread, NULL);
+
+	/*
 	for (unsigned long int row = 0; row < ns - 1; row++)
 	{
 		if (row % 100 == 0)
@@ -461,6 +524,7 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
+	*/
 
 	// Walk the locus list and print matches (if output is allowed)
 	unsigned long uniques = 0;
