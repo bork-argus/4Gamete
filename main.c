@@ -474,8 +474,9 @@ int main(int argc, char* argv[])
 				uniques++;
 				if (!l_no_output)
 				{
+					unsigned long match_index = p->match_index[i];
 					printf("%s %s\n", 
-							samples[locus_index].locusName, samples[i].locusName);
+							samples[locus_index].locusName, samples[match_index].locusName);
 				}
 			}
 
