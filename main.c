@@ -6,17 +6,31 @@
 #include <string.h>
 #include <sys/time.h>
 
+//----
 // Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
+// Two elements supports up to 128 alleles/locus.
+// Three elements would support up to 192 alleles/locus.
+//----
 #define MAX_ALLELE_ELEMENTS		(2)
 
+//----
+// Various macros to define the allele representation. Do not change any of these.
+//----
 #define NUM_BITS_PER_BYTE		(8)
 #define NUM_BITS_PER_ELEMENT	(sizeof(unsigned long long) * NUM_BITS_PER_BYTE)
 #define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
 
+//----
 // Command line options
-static unsigned char l_no_output = 0;
-static unsigned short l_num_threads = 1;
+//----
+static unsigned char l_no_output = 0;			// -n
+static unsigned short l_num_threads = 1;		// -j <num>
 
+//----
+// This structure is used to record matching indices into the sample array.
+// Up to LOCUS_INDEX_CHUNK indexes can be stored in the structure and additional
+// structures, in the case of overflow, are accessed through next_chunk.
+//----
 #define LOCUS_INDEX_CHUNK		(1024)
 typedef struct {
 	unsigned long			match_index[LOCUS_INDEX_CHUNK];
@@ -24,136 +38,21 @@ typedef struct {
 	struct LocusMatches		*next_chunk;
 } LocusMatches;
 
+//----
+// This structure defines a "locus", including its name and alleles stored as a
+// bit map. It also contains a pointer to any matching samples (in matches).
+//----
 typedef struct {
 	char 				locusName[128];
 	unsigned long long 	allele[MAX_ALLELE_ELEMENTS];	// alleles array. Each element represents 64 alleles.
 	LocusMatches		*matches;
 } Locus;
 
-unsigned short uniquePairsViaLocus2(const Locus *locus1, const Locus *locus2, const unsigned short numBits)
-{
-	static const unsigned long long bitmasks[] = {
-		1ULL, 1ULL << 1, 1ULL << 2, 1ULL << 3, 1ULL << 4, 1ULL << 5, 1ULL << 6, 1ULL << 7, 
-		1ULL << 8, 1ULL << 9, 1ULL << 10, 1ULL << 11, 1ULL << 12, 1ULL << 16, 1ULL << 14, 1ULL << 15, 
-		1ULL << 16, 1ULL << 17, 1ULL << 18, 1ULL << 19, 1ULL << 20, 1ULL << 21, 1ULL << 22, 1ULL << 23, 
-		1ULL << 24, 1ULL << 25, 1ULL << 26, 1ULL << 27, 1ULL << 28, 1ULL << 29, 1ULL << 30, 1ULL << 31, 
-		1ULL << 32, 1ULL << 33, 1ULL << 34, 1ULL << 35, 1ULL << 36, 1ULL << 37, 1ULL << 38, 1ULL << 39, 
-		1ULL << 40, 1ULL << 41, 1ULL << 42, 1ULL << 43, 1ULL << 44, 1ULL << 45, 1ULL << 46, 1ULL << 47, 
-		1ULL << 48, 1ULL << 49, 1ULL << 50, 1ULL << 51, 1ULL << 52, 1ULL << 53, 1ULL << 54, 1ULL << 55, 
-		1ULL << 56, 1ULL << 57, 1ULL << 58, 1ULL << 59, 1ULL << 60, 1ULL << 61, 1ULL << 62, 1ULL << 63		
-	};
-
-	//----
-	// Holds a record of now many unique pairs of bits we'd seen in the low four bits.
-	//----
-	unsigned char uniques = 0;
-
-	register char index = 0;
-	// register unsigned long long bitmask = 1ULL;
-	register unsigned long long p1 = locus1->allele[index], p2 = locus2->allele[index];
-	register const unsigned long long *bitmask = bitmasks;
-	for (unsigned short i = 0; i < numBits; i++)
-	{
-		// register unsigned long long p1_bit = p1 & bitmask;
-		// register unsigned long long p2_bit = p2 & bitmask;
-		register unsigned long long p1_bit = p1 & *bitmask;
-		register unsigned long long p2_bit = p2 & *bitmask;
-
-		if (p1_bit && p2_bit)
-			uniques |= 0x01;
-		else if (p1_bit)
-			uniques |= 0x02;
-		else if (p2_bit)
-			uniques |= 0x04;
-		else
-			uniques |= 0x08;
-
-		// no point in continuing if we already have 4 unique values.
-		if (uniques == 0x0F)
-			break;
-
-		// check the next bit
-		// bitmask <<= 1;
-
-		// if we've managed to rotate the bitmask all the way off the
-		// high end, we've exhausted how may bits are available in the
-		// current element. Advance to the next index and keep comparing.
-		// if (bitmask == 0ULL)
-		if (*bitmask == 1ULL << 63)
-		{
-			index++;
-			// bitmask = 1ULL;
-			bitmask = bitmasks;
-			p1 = locus1->allele[index];
-			p2 = locus1->allele[index];
-		}
-		else
-			bitmask++;
-	}
-
-	//---
-	// Convert the record of number of unique pairs in the
-	// bit pattern of uniques into numUniques. Basically, we
-	// are counting the number of set bits in the lowest
-	// four bits of uniques.
-	//----
-	unsigned short numUniques = 0;
-	/*
-	for (register unsigned char i = 0; i < 4; i++)
-	{
-		numUniques += uniques & 0x01;
-		uniques >>= 1;
-	}
-	*/
-
-	// This switch statement is a touch faster than looping and adding
-	// to calculate the number of uniques.
-	switch (uniques & 0x0F)
-	{
-		// This case should never occur
-		case 0x0:
-			break;
-
-		// Cases where exactly 1 bit is set
-		case 0x01:
-		case 0x02:
-		case 0x04:
-		case 0x08:
-			numUniques = 1;
-			break;
-
-		// All bits set	
-		case 0x0F:
-			numUniques = 4;
-			break;
-		
-		// Exactly 2 bits set
-		case 0x03:
-		case 0x05:
-		case 0x06:
-		case 0x09:
-		case 0x0A:
-		case 0x0C:
-			numUniques = 2;
-			break;
-
-		// Exactly 3 bits set
-		case 0x07:
-		case 0x0D:
-		case 0x0E:
-		case 0x0B:
-			numUniques = 3;
-			break;
-		
-		// This should be utterly impossible to get to
-		default:
-			// error?
-			break;
-	}
-
-	return numUniques;
-}
-
+/// @brief Compares numBits alleles associated with two loci, returning the number of unique matches found (1 - 4)
+/// @param locus1 First locus to compare
+/// @param locus2 Second locus to compare
+/// @param numBits Number of alleles to compare in the loci
+/// @return The number of unique matches in the alleles -- can only be up to 4.
 unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, const unsigned short numBits)
 {
 	//----
@@ -212,8 +111,10 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 	}
 	*/
 
+	//----
 	// This switch statement is a touch faster than looping and adding
 	// to calculate the number of uniques.
+	//----
 	switch (uniques & 0x0F)
 	{
 		// This case should never occur
@@ -328,17 +229,21 @@ void AddMatch(Locus *locus, unsigned long match_index)
 {
 	LocusMatches *p = locus->matches;
 
+	//----
 	// if this is the first time through, allocate the first match structure.
+	//----
 	if (p == NULL)
 	{
 		p = calloc(1, sizeof(LocusMatches));
 		locus->matches = p;
 	}
 
+	//----
 	// walk the matches list until we find either a structure with room,
 	// or a structure with no room and a NULL pointer.
 	// if there is room, then just add the value into the existing match structure,
 	// if there isn't room, then allocate a new one and add it in.
+	//----
 	while (p)
 	{
 		// Not full of match indices? Add her in and move on.
@@ -360,7 +265,11 @@ void AddMatch(Locus *locus, unsigned long match_index)
 	}
 }
 
+//----
 // Local variables for thread processing
+// This will be get populated by the main thread and then
+// passes to each child thread.
+//----
 typedef struct {
 	Locus 			*samples;
 	unsigned long 	num_samples;
@@ -392,7 +301,7 @@ void *processLoci(void *arg)
 		args->current_row += process_rows;
 		pthread_mutex_unlock(mutex);
 
-		/* if the thread detects we are done ... exit */
+		// if the thread detects we are done ... exit
 		if (start_row >= total_samples - 1)
 			break;
 
@@ -401,6 +310,12 @@ void *processLoci(void *arg)
 		if (end_row > total_samples - 1)
 			end_row = total_samples - 1;
 
+		//----
+		// Compare each row in our current block of rows to every sample
+		// that appears in the array after it. Yes, this is an exponential
+		// comparison and the sheer number of comparisons will make this a
+		// lengthy process.
+		//----
 		for (register unsigned long row = start_row; row < end_row; row++)
 		{
 			for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
@@ -412,15 +327,26 @@ void *processLoci(void *arg)
 			}
 		}
 
+		//----
 		// print progress every process_rows lines
+		//----
 		fprintf(stderr, ".");
 	}
 
 	return NULL;
 }
 
+/// @brief Entry point of application.
+/// @param argc 
+/// @param argv 
+/// @return 
 int main(int argc, char* argv[])
 {
+	//----
+	// Handle command line options
+	// -n = no output
+	// -j <num> = number of threads to launch -- set to number of cores in processor for optimal results.
+	//----
     int c;
     extern char *optarg;
     extern int optind, opterr, optopt;
@@ -441,15 +367,18 @@ int main(int argc, char* argv[])
         }
     }
 
-	// char const* const fileName = "binary_alleles_per_var.txt";
 	if (argc <= optind)
 	{
 		fprintf(stderr, "Usage: %s <input allele file data>\n", argv[0]);
 		exit(-1);
 	}
 
+	//----
+	// the last argument on the command line after all processed arguments 
+	// is the input file with loci and alleles.
+	//----
     char const* const fileName = argv[optind];
-	FILE* file = fopen(fileName, "r"); /* should check the result */
+	FILE* file = fopen(fileName, "r");
 	if (file == NULL)
 	{
 		fprintf(stderr, "Could not open input file: %s\n", fileName);
@@ -511,18 +440,35 @@ int main(int argc, char* argv[])
 
 	fclose(file);
 
-	/* samples are in samples[] ... run a double loop to compare */
+	/* samples are in samples[] */
 	/* ns holds the number of samples read */
 	
 	fprintf(stderr, "Processing %ld samples\n", ns);
 
 	struct timeval t0, t1;
-
 	gettimeofday(&t0, NULL);
 
-	// peel off a thread to handle the comparisons
+	//----
+	// peel off threads to handle the comparisons
+	// ideally, -j on the command line set the number of threads to be
+	// the number of processor cores available. We'll use each core to
+	// simultaneously process various parts of the samples in parallel.
+	// See thread function processLoci().
+	//----
 	pthread_t *thread = calloc(l_num_threads, sizeof(pthread_t));
 
+	//----
+	// This communicates various processing values to the threads.
+	// Of course, each thread must know specifics about the data.
+	// We pass samples, the number of samples, the number of alleles
+	// per locus, and the current row for the threads to work on.
+	// Note that the current_row will be advanced by each thread
+	// as they do their work. Because each thread will advance this
+	// value, it is very important to protect current_row from
+	// race conditions. Thus the mutex which is used to ensure that
+	// only one thread at a time accesses current_row (and more importantly
+	// can modify it).
+	//----
 	ThreadArgs thread_args;
 	thread_args.num_alleles = nAlleles;
 	thread_args.num_samples = ns;
@@ -530,6 +476,13 @@ int main(int argc, char* argv[])
 	thread_args.current_row = 0;
 	pthread_mutex_init(&(thread_args.current_row_mutex), NULL);
 
+	//----
+	// Spin up the number of threads requested. As soon as the
+	// thread is created, it will begin to do work.
+	// Store the thread identifier in the thread array.
+	// We'll use these identifiers to wait until all threads
+	// are done before continuing here.
+	//----
 	for (unsigned short i = 0; i < l_num_threads; i++)
 	{
 		int err = pthread_create(&(thread[i]), NULL, 
@@ -540,7 +493,10 @@ int main(int argc, char* argv[])
 			fprintf(stderr, "\n Thread created successfully\n");
 	}
 
+	//----
 	// wait for all the threads to finish
+	// This loop cannot complete until all threads complete.
+	//----
 	for (unsigned short i = 0; i < l_num_threads; i++)
 	{
 		pthread_join(thread[i], NULL);
@@ -552,8 +508,19 @@ int main(int argc, char* argv[])
 	double elapsed = (double)(t1.tv_usec - t0.tv_usec) / 1000000 + (double)(t1.tv_sec - t0.tv_sec);
 	fprintf(stderr, "\n\nElapsed time to perform comparisons: %f seconds\n", elapsed);
 
-	gettimeofday(&t0, NULL);
+	//----
 	// Walk the locus list and print matches (if output is allowed)
+	// The processing threads identify matching pairs of locus and store
+	// this information in structures attached to each locus in our samples.
+	// Each block of matches can handle 1024 matches, but sometimes that might
+	// not be enough, so, if it overflows, the system allocates another
+	// block of 1024 slots and stores a pointer to it in next_chunk.
+	// This block of code walks through this data structure and decodes the
+	// matches, counting them and potentially printing to stdout as it
+	// goes.
+	//-----
+	gettimeofday(&t0, NULL);
+
 	unsigned long uniques = 0;
 	for (register unsigned long locus_index = 0; locus_index < numLoci; locus_index++)
 	{
@@ -576,11 +543,21 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	//----
+	// Print out various statistics about the processing at the end.
+	//----
 	gettimeofday(&t1, NULL);
 	elapsed = (double)(t1.tv_usec - t0.tv_usec) / 1000000 + (double)(t1.tv_sec - t0.tv_sec);
 	fprintf(stderr, "\nElapsed time to write results: %f seconds\n", elapsed);
 
 	fprintf(stderr, "\nFound %ld sample matches\n", uniques);
+
+	fprintf(stderr, "\nStats:\n");
+
+	double matching_percentage = (((double) uniques * 2) / (((double) ns) * ((double) ns - 1))) * 100;
+	fprintf(stderr, "Matching percentage: %.3f%%\n", matching_percentage);
+
+	fprintf(stderr, "\n");
 
     return 0;
 }
