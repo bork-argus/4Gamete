@@ -8,27 +8,18 @@
 #include <limits.h>
 
 //----
-// Set MAX_ALLELE_ELEMENTS to the maximum number of 64-bit storage elements you want to support for Alleles.
-// Two elements supports up to 128 alleles/locus.
-// Three elements would support up to 192 alleles/locus.
-//----
-
-// Maximum number of allele elements we store per locus
-// Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
-#define MAX_ALLELE_ELEMENTS		(2)
-
-//----
 // Various macros to define the allele representation. Do not change any of these.
 //----
+
+// An allele bitmap element. Sometimes these are arranged in an array to
+// allow for more alleles.
+typedef unsigned long long AlleleBitmapElement;
 
 // Number of bits per byte from limits.h
 #define NUM_BITS_PER_BYTE		(CHAR_BIT)
 
 // Maximum number of bits per allele element representation
-#define NUM_BITS_PER_ELEMENT	(sizeof(unsigned long long) * NUM_BITS_PER_BYTE)
-
-// Maximum number of alleles per locus we can handle
-#define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
+#define NUM_BITS_PER_ALLELE_ELEMENT	(sizeof(AlleleBitmapElement) * NUM_BITS_PER_BYTE)
 
 //----
 // Defines the temporary storage for each line read from the input file.
@@ -61,7 +52,14 @@ typedef struct {
 // bit map. It also contains a pointer to any matching samples (in field matches).
 typedef struct {
 	char 				locusName[128];
-	unsigned long long 	allele[MAX_ALLELE_ELEMENTS];	// alleles array. Each element represents 64 alleles.
+	// If number of alleles/locus <= (sizeof(AlleleBitMapElement) * BITS_PER_BYTE), 
+	// we store the bitmap directly here in bitMap, otherwise, we store a
+	// pointer to the AlleleBitMapElement where enough sequential AlleleBitMaps are 
+	// allocated for the Locus.
+	union {
+		AlleleBitmapElement		bitMap;
+		AlleleBitmapElement     *pBitMap;
+	}  					alleles;
 	LocusMatches		*matches;
 } Locus;
 
@@ -75,15 +73,37 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 	//----
 	// Holds a record of now many unique pairs of bits we'd seen in the low four bits.
 	//----
-	unsigned char uniques = 0;
+	register unsigned char uniques = 0;
 
-	register char index = 0;
 	register unsigned long long bitmask = 1ULL;
-	register unsigned long long p1 = locus1->allele[index], p2 = locus2->allele[index];
+
+	//----
+	// If the number of bits requires for an allele set is < sizeof(AlleleBitmapElement), then, we simply
+	// have stored the allele information directly in locus->alleles.bitMap, so take a pointer to that.
+	// If more, then a pointer to the allele bitmap array is in locus->alleles.pBitmap.
+	//----
+	// The current value of the allele bitmap element
+	register AlleleBitmapElement p1 = locus1->alleles.bitMap;
+	// The current value of the allele bitmap element
+	register AlleleBitmapElement p2 = locus2->alleles.bitMap;
+
+	// A pointer to the allele information for the locus1
+	const AlleleBitmapElement *pA1 = locus1->alleles.pBitMap;
+	// A pointer to the allele information for the locus2
+	const AlleleBitmapElement *pA2 = locus2->alleles.pBitMap;
+
+	// override the initial (incorrectly values) of p1/p2 values if we are dealing with a pointer in
+	// pA1/pA2.
+	if (numBits > NUM_BITS_PER_ALLELE_ELEMENT)
+	{
+		p1 = *pA1;
+		p2 = *pA2;
+	}
+
 	for (unsigned short i = 0; i < numBits; i++)
 	{
-		register unsigned long long p1_bit = p1 & bitmask;
-		register unsigned long long p2_bit = p2 & bitmask;
+		register AlleleBitmapElement p1_bit = p1 & bitmask;
+		register AlleleBitmapElement p2_bit = p2 & bitmask;
 
 		if (p1_bit && p2_bit)
 			uniques |= 0x01;
@@ -106,10 +126,9 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 		// current element. Advance to the next index and keep comparing.
 		if (bitmask == 0ULL)
 		{
-			index++;
 			bitmask = 1ULL;
-			p1 = locus1->allele[index];
-			p2 = locus1->allele[index];
+			p1 = *++pA1;
+			p2 = *++pA2;
 		}
 	}
 
@@ -202,9 +221,10 @@ unsigned short numAlleles(const char *locusLine)
 }
 
 /// @brief Parses a input file line into a Locus structure
-/// @param locusLine 
+/// @param locusLine Locus line from input file
+//  @param allele_location Where to store the allele bitmap (can be NULL)
 /// @return 
-Locus parseLocus(const char *locusLine)
+Locus parseLocus(const char *locusLine, AlleleBitmapElement *allele_location)
 {
 	Locus locus;
 
@@ -220,19 +240,24 @@ Locus parseLocus(const char *locusLine)
 	}
 	*ln = '\0';  // terminate the locus name.
 
-	// initialize allelles
-	for (register unsigned char i = 0; i < MAX_ALLELE_ELEMENTS; i++)
-		locus.allele[i] = 0;
+	// initialize allelle bitmap information
+	locus.alleles.pBitMap = allele_location;
+	AlleleBitmapElement *pAllele = allele_location ? allele_location : &(locus.alleles.bitMap);
+	*pAllele = 0;
 
 	unsigned short numAlleles;
 	for (; *p; p++)
 	{
 		if (*p == '0' || *p == '1')
 		{
-			unsigned char index = numAlleles/NUM_BITS_PER_ELEMENT;
-			locus.allele[index] <<= 1;		// shift to left
-			locus.allele[index] |= (*p == '0' ? 0 : 1); // OR in the new allele
+			*pAllele <<= 1;		// shift to left
+			*pAllele |= (*p == '0' ? 0 : 1); // OR in the new allele
 			numAlleles++;
+
+			// if we've processed NUM_BITS_PER_ALLELE_ELEMENT alleles, then
+			// increment our allele pointer to the next element
+			if (numAlleles % NUM_BITS_PER_ALLELE_ELEMENT == 0)
+				*++pAllele = 0;
 		}
 	}
 
@@ -302,9 +327,10 @@ void AddMatch(Locus *locus, unsigned long match_index)
 /// @brief Holds information about an input file
 typedef struct
 {
-	Locus			*loci;
-	unsigned long	num_loci;
-	unsigned short	num_alleles;
+	Locus				*loci;
+	AlleleBitmapElement *alleles;
+	unsigned long		num_loci;
+	unsigned short		num_alleles;
 } InputFileInfo;
 
 #define IS_INPUT_VALID(input_file_info)		(input_file_info.loci != NULL)
@@ -439,6 +465,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 
 	// Initialize the file information
 	fileInfo.loci = NULL;
+	fileInfo.alleles = NULL;
 	fileInfo.num_loci = 0;
 	fileInfo.num_alleles = 0;
 
@@ -495,14 +522,6 @@ InputFileInfo ReadInputFile(const char *fileName)
 	//----
 	fgets(line, sizeof(line), file);
 	fileInfo.num_alleles = numAlleles(line);
-	if (fileInfo.num_alleles > MAX_ALLELES)
-	{
-		fprintf(stderr, "Input file [%s] specifies too many alleles (%d) which is larger than "
-							"the maximum: [%ld]\n\n"
-							"Either increase MAX_ALLELE_ELEMENTS or reduce alleles in the input file.", 
-							fileName, fileInfo.num_alleles, MAX_ALLELES);
-		exit(-1);
-	}
 
 	rewind(file);
 
@@ -513,6 +532,24 @@ InputFileInfo ReadInputFile(const char *fileName)
 	//----
 	unsigned long ns = 0;
 	Locus *samples = fileInfo.loci;
+
+	//----
+	// Allocate enough memory to hold all of our alleles. We only need to
+	// allocate memory if the number of alleles/locus is > NUM_BITS_PER_ALLELE_ELEMENT
+	// otherwise we can safely store the bitmap in the pointer memory and save the
+	// deference and memory allocation.
+	//----
+	unsigned short numElementsRequired = fileInfo.num_alleles/NUM_BITS_PER_ALLELE_ELEMENT + 1;
+	if (numElementsRequired > 1)
+	{
+		fileInfo.alleles = (AlleleBitmapElement *) calloc(numLoci * numElementsRequired, sizeof(AlleleBitmapElement));
+		if (fileInfo.alleles == NULL)
+		{
+			fprintf(stderr, "Unable to allocate memory for %ld alleles. Aborting.\n\n", numLoci * numElementsRequired);
+			exit(-1);
+		}
+	}
+
 	while (fgets(line, sizeof(line), file)) 
 	{
 		/* note that fgets don't strip the terminating \n, checking its
@@ -520,8 +557,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 
 		// this should bit copy the parsed Locus structure into our array of
 		// loci.
-		samples[ns] = parseLocus(line);
-
+		samples[ns] = parseLocus(line, fileInfo.alleles ? &(fileInfo.alleles[ns * numElementsRequired]) : NULL);
 		ns++;
 	}
 
@@ -724,6 +760,12 @@ int main(int argc, char* argv[])
 	free(file1.loci);
 	if (IS_INPUT_VALID(file2))
 		free(file2.loci);
+
+	if (file1.num_alleles > NUM_BITS_PER_ALLELE_ELEMENT)
+		free(file1.alleles);
+	
+	if (file2.num_alleles > NUM_BITS_PER_ALLELE_ELEMENT)
+		free(file2.alleles);
 
     return 0;
 }
