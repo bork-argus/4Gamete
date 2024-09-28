@@ -375,14 +375,12 @@ void *processLoci(void *arg)
 		if (end_row > final_processing_row)
 			end_row = final_processing_row;
 
-		//----
-		// Compare each row in our current block of rows to every sample
-		// that appears in the array after it. Yes, this is an exponential
-		// comparison and the sheer number of comparisons will make this a
-		// lengthy process.
-		//----
 		if (file2_valid)
 		{
+			//----
+			// Compare each row in our current block of rows to every sample
+			// appearing in the second file.
+			//----
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
 				for (register unsigned long cmp_row = 0; cmp_row < total_samples2; cmp_row++)
@@ -396,6 +394,12 @@ void *processLoci(void *arg)
 		}
 		else
 		{
+			//----
+			// Compare each row in our current block of rows to every sample
+			// appearing in the array after it. Yes, this is an exponential
+			// comparison and the sheer number of comparisons will make this a
+			// lengthy process.
+			//----
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
 				for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
