@@ -5,19 +5,29 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/time.h>
+#include <limits.h>
 
 //----
-// Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
+// Set MAX_ALLELE_ELEMENTS to the maximum number of 64-bit storage elements you want to support for Alleles.
 // Two elements supports up to 128 alleles/locus.
 // Three elements would support up to 192 alleles/locus.
 //----
+
+// Maximum number of allele elements we store per locus
+// Set this to the maximum number of 64-bit storage elements you want to support for Alleles.
 #define MAX_ALLELE_ELEMENTS		(2)
 
 //----
 // Various macros to define the allele representation. Do not change any of these.
 //----
-#define NUM_BITS_PER_BYTE		(8)
+
+// Number of bits per byte from limits.h
+#define NUM_BITS_PER_BYTE		(CHAR_BIT)
+
+// Maximum number of bits per allele element representation
 #define NUM_BITS_PER_ELEMENT	(sizeof(unsigned long long) * NUM_BITS_PER_BYTE)
+
+// Maximum number of alleles per locus we can handle
 #define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
 
 //----
@@ -35,22 +45,20 @@
 static unsigned char l_no_output = 0;			// -n
 static unsigned short l_num_threads = 1;		// -j <num>
 
-//----
+// defines the maximum number of matching indices we can store in a LocusMatches structure.
+#define LOCUS_INDEX_CHUNK		(1024)
+
 // This structure is used to record matching indices into the sample array.
 // Up to LOCUS_INDEX_CHUNK indexes can be stored in the structure and additional
 // structures, in the case of overflow, are accessed through next_chunk.
-//----
-#define LOCUS_INDEX_CHUNK		(1024)
 typedef struct {
 	unsigned long			match_index[LOCUS_INDEX_CHUNK];
 	unsigned short			num_matches;
 	struct LocusMatches		*next_chunk;
 } LocusMatches;
 
-//----
 // This structure defines a "locus", including its name and alleles stored as a
-// bit map. It also contains a pointer to any matching samples (in matches).
-//----
+// bit map. It also contains a pointer to any matching samples (in field matches).
 typedef struct {
 	char 				locusName[128];
 	unsigned long long 	allele[MAX_ALLELE_ELEMENTS];	// alleles array. Each element represents 64 alleles.
