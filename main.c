@@ -21,6 +21,15 @@
 #define MAX_ALLELES 			(MAX_ALLELE_ELEMENTS * NUM_BITS_PER_ELEMENT)
 
 //----
+// Defines the temporary storage for each line read from the input file.
+// If any will exceed this value, it will need to be raised.
+// Keep in mind this is allocated on the stack, so, if it is raised
+// beyond, say 1024, it might be wiser to dynamically allocated the space
+// in the heap instead.
+//----
+#define MAX_LINE_LENGTH			(384)
+
+//----
 // Command line options
 //----
 static unsigned char l_no_output = 0;			// -n
@@ -234,7 +243,13 @@ void AddMatch(Locus *locus, unsigned long match_index)
 	//----
 	if (p == NULL)
 	{
-		p = calloc(1, sizeof(LocusMatches));
+		p = (LocusMatches *) calloc(1, sizeof(LocusMatches));
+		if (p == NULL)
+		{
+			fprintf(stderr, "Failed to allocate memory to store locus matches. Aborting.\n\n");
+			exit(-1);
+		}
+
 		locus->matches = p;
 	}
 
@@ -246,7 +261,9 @@ void AddMatch(Locus *locus, unsigned long match_index)
 	//----
 	while (p)
 	{
+		//----
 		// Not full of match indices? Add her in and move on.
+		//----
 		if (p->num_matches < LOCUS_INDEX_CHUNK)
 		{
 			p->match_index[p->num_matches] = match_index;
@@ -255,15 +272,34 @@ void AddMatch(Locus *locus, unsigned long match_index)
 		}
 		else
 		{
+			//----
 			// walk to the next one, if we are at the end, allocate a new one and 
 			// add it into the list and then keep going.
+			//----
 			if (p->next_chunk == NULL)
-				p->next_chunk = calloc(1, sizeof(LocusMatches));
+			{
+				p->next_chunk = (struct LocusMatches *) calloc(1, sizeof(LocusMatches));
+				if (p->next_chunk == NULL)
+				{
+					fprintf(stderr, "Failed to allocate memory to store next locus matches. Aborting.\n\n");
+					exit(-1);
+				}
+			}
 			
 			p = (LocusMatches *) p->next_chunk;
 		}
 	}
 }
+
+/// @brief Holds information about an input file
+typedef struct
+{
+	Locus			*loci;
+	unsigned long	num_loci;
+	unsigned short	num_alleles;
+} InputFileInfo;
+
+#define IS_INPUT_VALID(input_file_info)		(input_file_info.loci != NULL)
 
 //----
 // Local variables for thread processing
@@ -271,9 +307,8 @@ void AddMatch(Locus *locus, unsigned long match_index)
 // passes to each child thread.
 //----
 typedef struct {
-	Locus 			*samples;
-	unsigned long 	num_samples;
-	unsigned short	num_alleles;
+	InputFileInfo	file1;
+	InputFileInfo	file2;
 	unsigned long	current_row;
 	pthread_mutex_t current_row_mutex;
 } ThreadArgs;
@@ -287,10 +322,14 @@ void *processLoci(void *arg)
 
 	const unsigned long process_rows = 100;
 
-	Locus *samples = args->samples;
-	unsigned long total_samples = args->num_samples;
-	unsigned short nAlleles = args->num_alleles;
+	Locus *samples = args->file1.loci;
+	unsigned long total_samples = args->file1.num_loci;
+	unsigned short nAlleles = args->file1.num_alleles;
 	pthread_mutex_t *mutex = &(args->current_row_mutex);
+
+	unsigned char file2_valid = IS_INPUT_VALID(args->file2);
+	Locus *samples2 = args->file2.loci;
+	unsigned long total_samples2 = args->file2.num_loci;
 
 	while (1)
 	{
@@ -316,14 +355,30 @@ void *processLoci(void *arg)
 		// comparison and the sheer number of comparisons will make this a
 		// lengthy process.
 		//----
-		for (register unsigned long row = start_row; row < end_row; row++)
+		if (!file2_valid)
 		{
-			for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
+			for (register unsigned long row = start_row; row < end_row; row++)
 			{
-				if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+				for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
 				{
-					AddMatch(&(samples[row]), cmp_row);
-				}				
+					if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+					{
+						AddMatch(&(samples[row]), cmp_row);
+					}				
+				}
+			}
+		}
+		else
+		{
+			for (register unsigned long row = start_row; row < end_row; row++)
+			{
+				for (register unsigned long cmp_row = 0; cmp_row < total_samples2; cmp_row++)
+				{
+					if (uniquePairsViaLocus(&(samples[row]), &(samples2[cmp_row]), nAlleles) == 4)
+					{
+						AddMatch(&(samples[row]), cmp_row);
+					}				
+				}
 			}
 		}
 
@@ -334,6 +389,113 @@ void *processLoci(void *arg)
 	}
 
 	return NULL;
+}
+
+/// @brief Reads the input file and returns the Locus samples
+/// @param filename 
+/// @return Structure with loci and stats
+InputFileInfo ReadInputFile(const char *fileName)
+{
+	// File information structure.
+	InputFileInfo		fileInfo;
+
+	// Initialize the file information
+	fileInfo.loci = NULL;
+	fileInfo.num_loci = 0;
+	fileInfo.num_alleles = 0;
+
+	//----
+	// If filename is unspecified, bail.
+	//----
+	if (fileName == NULL || *fileName == '\0')
+	{
+		return fileInfo;
+	}
+
+	//----
+	// Open the input file
+	//----
+	FILE* file = fopen(fileName, "r");
+	if (file == NULL)
+	{
+		fprintf(stderr, "Could not open input file: %s\n", fileName);
+		exit(-1);
+	}
+
+	//----
+	// This will break if any lines in the input file are greater than
+	// MAX_LINE_LENGTH. If that happens, raise MAX_LINE_LENGTH and
+	// recompile.
+	//----
+	char line[MAX_LINE_LENGTH];
+
+	//----
+	// read in the file, discarding the contents as we go.
+	// We are only interested in the number of records in the
+	// file at this point.
+	//----
+	unsigned long numLoci = 0;
+	while (fgets(line, sizeof(line), file))
+		numLoci++;
+
+	//----
+	// Allocate space enough for all the records in the file.
+	//----
+	fileInfo.loci = (Locus *) calloc(numLoci, sizeof(Locus));
+	if (fileInfo.loci == NULL)
+	{
+		fprintf(stderr, "Failed to allocate memory to store %s. Aborting.", fileName);
+		exit(-1);
+	}
+
+	// reset file pointer to beginning to file
+	rewind(file);
+
+	//----
+	// Read in the first line to determine the number of
+	// allenes for this file.
+	//----
+	fgets(line, sizeof(line), file);
+	fileInfo.num_alleles = numAlleles(line);
+	if (fileInfo.num_alleles > MAX_ALLELES)
+	{
+		fprintf(stderr, "Input file [%s] specifies too many alleles (%d) which is larger than "
+							"the maximum: [%ld]\n\n"
+							"Either increase MAX_ALLELE_ELEMENTS or reduce alleles in the input file.", 
+							fileName, fileInfo.num_alleles, MAX_ALLELES);
+		exit(-1);
+	}
+
+	rewind(file);
+
+	//----
+	// Read in the file (again) converting the
+	// lines as we go into Locus structures and
+	// storing them in our samples array.
+	//----
+	unsigned long ns = 0;
+	Locus *samples = fileInfo.loci;
+	while (fgets(line, sizeof(line), file)) 
+	{
+		/* note that fgets don't strip the terminating \n, checking its
+		   presence would allow to handle lines longer that sizeof(line) */
+
+		// this should bit copy the parsed Locus structure into our array of
+		// loci.
+		samples[ns] = parseLocus(line);
+
+		ns++;
+	}
+
+	fileInfo.num_loci = ns;
+
+	/* may check feof here to make a difference between 
+	   eof and io failure -- network
+	   timeout for instance */
+
+	fclose(file);
+
+	return fileInfo;
 }
 
 /// @brief Entry point of application.
@@ -374,76 +536,23 @@ int main(int argc, char* argv[])
 	}
 
 	//----
-	// the last argument on the command line after all processed arguments 
-	// is the input file with loci and alleles.
+	// Read the input files specified on the command line
 	//----
-    char const* const fileName = argv[optind];
-	FILE* file = fopen(fileName, "r");
-	if (file == NULL)
+	InputFileInfo file1 = ReadInputFile(argv[optind]);
+	InputFileInfo file2 = ReadInputFile(argc >= optind + 1 ? argv[optind + 1] : NULL);
+
+	//----
+	// Check if the two files match up with number of alleles
+	// If not, bail.
+	//----
+	if (IS_INPUT_VALID(file2) && (file1.num_alleles != file2.num_alleles))
 	{
-		fprintf(stderr, "Could not open input file: %s\n", fileName);
+		fprintf(stderr, "File %s number of alleles (%d) mismatches with file %s (%d)\n\n",
+				argv[optind], file1.num_alleles, argv[optind + 1], file2.num_alleles);
 		exit(-1);
 	}
-
-	char line[256];
-	char filename[128];
-
-	Locus *samples;
-
-	//----
-	// read in the file, discarding the contents as we go.
-	// We are only interested in the number of records in the
-	// file at this point.
-	//----
-	unsigned long numLoci = 0;
-	while (fgets(line, sizeof(line), file))
-		numLoci++;
-
-	//----
-	// Allocate space enough for all the records in the file.
-	//----
-	samples = calloc(numLoci, sizeof(Locus));
-
-	// reset file pointer to beginning to file
-	rewind(file);
-
-	//----
-	// Read in the first line to determine the number of
-	// allenes for this file.
-	//----
-	fgets(line, sizeof(line), file);
-	const unsigned short nAlleles = numAlleles(line);
-
-	rewind(file);
-
-	//----
-	// Read in the file (again) converting the
-	// lines as we go into Locus structures and
-	// storing them in our samples array.
-	//----
-	unsigned long ns = 0;
-	while (fgets(line, sizeof(line), file)) 
-	{
-		/* note that fgets don't strip the terminating \n, checking its
-		   presence would allow to handle lines longer that sizeof(line) */
-
-		// this should bit copy the parsed Locus structure into our array of
-		// loci.
-		samples[ns] = parseLocus(line);
-
-		ns++;
-	}
-
-	/* may check feof here to make a difference between 
-	   eof and io failure -- network
-	   timeout for instance */
-
-	fclose(file);
-
-	/* samples are in samples[] */
-	/* ns holds the number of samples read */
-	
-	fprintf(stderr, "Processing %ld samples\n", ns);
+		
+	fprintf(stderr, "Processing %ld samples\n", file1.num_loci);
 
 	struct timeval t0, t1;
 	gettimeofday(&t0, NULL);
@@ -455,7 +564,7 @@ int main(int argc, char* argv[])
 	// simultaneously process various parts of the samples in parallel.
 	// See thread function processLoci().
 	//----
-	pthread_t *thread = calloc(l_num_threads, sizeof(pthread_t));
+	pthread_t *thread = (pthread_t *) calloc(l_num_threads, sizeof(pthread_t));
 
 	//----
 	// This communicates various processing values to the threads.
@@ -470,9 +579,8 @@ int main(int argc, char* argv[])
 	// can modify it).
 	//----
 	ThreadArgs thread_args;
-	thread_args.num_alleles = nAlleles;
-	thread_args.num_samples = ns;
-	thread_args.samples = samples;
+	thread_args.file1 = file1;
+	thread_args.file2 = file2;
 	thread_args.current_row = 0;
 	pthread_mutex_init(&(thread_args.current_row_mutex), NULL);
 
@@ -490,7 +598,7 @@ int main(int argc, char* argv[])
 		if (err != 0)
 			fprintf(stderr, "\n Can't create thread :[%s]", strerror(err));
 		else
-			fprintf(stderr, "\n Thread created successfully\n");
+			fprintf(stderr, "\n Thread created successfully.\n");
 	}
 
 	//----
@@ -521,8 +629,10 @@ int main(int argc, char* argv[])
 	//-----
 	gettimeofday(&t0, NULL);
 
+	Locus *samples = file1.loci;
+
 	unsigned long uniques = 0;
-	for (register unsigned long locus_index = 0; locus_index < numLoci; locus_index++)
+	for (register unsigned long locus_index = 0; locus_index < file1.num_loci; locus_index++)
 	{
 		LocusMatches *p = samples[locus_index].matches;
 		while (p)
@@ -535,11 +645,17 @@ int main(int argc, char* argv[])
 					unsigned long match_index = p->match_index[i];
 					printf("%s %s\n", 
 							samples[locus_index].locusName, 
-							samples[match_index].locusName);
+							IS_INPUT_VALID(file2) ? file2.loci[match_index].locusName : samples[match_index].locusName);
 				}
 			}
 
-			p = (LocusMatches *) p->next_chunk;
+			//----
+			// We no longer need the memory here, so free it up, but before we do, grab the next pointer.
+			//----
+			LocusMatches *next = (LocusMatches *) p->next_chunk;
+			free(p);
+
+			p = next;
 		}
 	}
 
@@ -554,10 +670,22 @@ int main(int argc, char* argv[])
 
 	fprintf(stderr, "\nStats:\n");
 
-	double matching_percentage = (((double) uniques * 2) / (((double) ns) * ((double) ns - 1))) * 100;
-	fprintf(stderr, "Matching percentage: %.3f%%\n", matching_percentage);
+	if (!IS_INPUT_VALID(file2))
+	{
+		double matching_percentage = (((double) uniques * 2) / (((double) file1.num_loci) * ((double) file1.num_loci - 1))) * 100;
+		fprintf(stderr, "Matching percentage: %.3f%%\n", matching_percentage);
+	}
 
 	fprintf(stderr, "\n");
+
+	//----
+	// Free the sample storage
+	// Technically, we are killing the process anyway, the memory would get freed
+	// regardless, but let's be cleaner about this.
+	//----
+	free(file1.loci);
+	if (IS_INPUT_VALID(file2))
+		free(file2.loci);
 
     return 0;
 }
