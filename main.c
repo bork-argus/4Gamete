@@ -331,6 +331,29 @@ void *processLoci(void *arg)
 	Locus *samples2 = args->file2.loci;
 	unsigned long total_samples2 = args->file2.num_loci;
 
+	//----
+	// There is different end-game processing if we are handling
+	// one file vs. two.
+	// If we are processing only File1, then we can't compare the
+	// last row (index = total_samples - 1) to anything -- there
+	// are no rows after it to compare against, so ... we stop
+	// if the starting row is index (total_samples - 1) or greater.
+	// If we are comparing against a second file, then we need to
+	// process all rows in file1 (i.e. until starting row advances
+	// to total_samples).
+	//----
+	unsigned char last_index_from_end = 1;
+	if (file2_valid)
+	{
+		//----
+		// We need to process all rows in File1 so we process until
+		// start_row is actually invalid (i.e. larger or equal to total_samples)
+		//----
+		last_index_from_end = 0;
+	}
+
+	const unsigned long final_processing_row = total_samples - last_index_from_end;
+
 	while (1)
 	{
 		// only one thread can access current_row at a time
@@ -339,15 +362,18 @@ void *processLoci(void *arg)
 		unsigned long start_row = args->current_row;
 		args->current_row += process_rows;
 		pthread_mutex_unlock(mutex);
-
+				
 		// if the thread detects we are done ... exit
-		if (start_row >= total_samples - 1)
+		if (start_row >= final_processing_row)
 			break;
 
+		//----
 		// calculate the last row to process. If we fall off the end, adjust
+		// back to the index beyond the last row we should touch.
+		//----
 		unsigned long end_row = start_row + process_rows;
-		if (end_row > total_samples - 1)
-			end_row = total_samples - 1;
+		if (end_row > final_processing_row)
+			end_row = final_processing_row;
 
 		//----
 		// Compare each row in our current block of rows to every sample
@@ -355,13 +381,13 @@ void *processLoci(void *arg)
 		// comparison and the sheer number of comparisons will make this a
 		// lengthy process.
 		//----
-		if (!file2_valid)
+		if (file2_valid)
 		{
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
-				for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
+				for (register unsigned long cmp_row = 0; cmp_row < total_samples2; cmp_row++)
 				{
-					if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+					if (uniquePairsViaLocus(&(samples[row]), &(samples2[cmp_row]), nAlleles) == 4)
 					{
 						AddMatch(&(samples[row]), cmp_row);
 					}				
@@ -372,9 +398,9 @@ void *processLoci(void *arg)
 		{
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
-				for (register unsigned long cmp_row = 0; cmp_row < total_samples2; cmp_row++)
+				for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
 				{
-					if (uniquePairsViaLocus(&(samples[row]), &(samples2[cmp_row]), nAlleles) == 4)
+					if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
 					{
 						AddMatch(&(samples[row]), cmp_row);
 					}				
