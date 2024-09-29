@@ -79,7 +79,7 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 
 	//----
 	// If the number of bits requires for an allele set is < sizeof(AlleleBitmapElement), then, we simply
-	// have stored the allele information directly in locus->alleles.bitMap, so take a pointer to that.
+	// have stored the allele information directly in locus->alleles.bitMap.
 	// If more, then a pointer to the allele bitmap array is in locus->alleles.pBitmap.
 	//----
 	// The current value of the allele bitmap element
@@ -92,8 +92,7 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 	// A pointer to the allele information for the locus2
 	const AlleleBitmapElement *pA2;
 
-	// override the initial (incorrectly values) of p1/p2 values if we are dealing with a pointer in
-	// pA1/pA2.
+	// access the appropriate bitmap
 	if (numBits > NUM_BITS_PER_ALLELE_ELEMENT)
 	{
 		pA1 = locus1->alleles.pBitMap;
@@ -425,11 +424,12 @@ void *processLoci(void *arg)
 			//----
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
+				Locus *locus1 = &(samples[row]);
 				for (register unsigned long cmp_row = 0; cmp_row < total_samples2; cmp_row++)
 				{
-					if (uniquePairsViaLocus(&(samples[row]), &(samples2[cmp_row]), nAlleles) == 4)
+					if (uniquePairsViaLocus(locus1, &(samples2[cmp_row]), nAlleles) == 4)
 					{
-						AddMatch(&(samples[row]), cmp_row);
+						AddMatch(locus1, cmp_row);
 					}				
 				}
 			}
@@ -444,11 +444,12 @@ void *processLoci(void *arg)
 			//----
 			for (register unsigned long row = start_row; row < end_row; row++)
 			{
+				Locus *locus1 = &(samples[row]);
 				for (register unsigned long cmp_row = row + 1; cmp_row < total_samples; cmp_row++)
 				{
-					if (uniquePairsViaLocus(&(samples[row]), &(samples[cmp_row]), nAlleles) == 4)
+					if (uniquePairsViaLocus(locus1, &(samples[cmp_row]), nAlleles) == 4)
 					{
-						AddMatch(&(samples[row]), cmp_row);
+						AddMatch(locus1, cmp_row);
 					}				
 				}
 			}
@@ -526,7 +527,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 
 	//----
 	// Read in the first line to determine the number of
-	// allenes for this file.
+	// alleles for this file.
 	//----
 	fgets(line, sizeof(line), file);
 	fileInfo.num_alleles = numAlleles(line);
