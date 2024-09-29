@@ -83,21 +83,29 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 	// If more, then a pointer to the allele bitmap array is in locus->alleles.pBitmap.
 	//----
 	// The current value of the allele bitmap element
-	register AlleleBitmapElement p1 = locus1->alleles.bitMap;
+	register AlleleBitmapElement p1;
 	// The current value of the allele bitmap element
-	register AlleleBitmapElement p2 = locus2->alleles.bitMap;
+	register AlleleBitmapElement p2;
 
 	// A pointer to the allele information for the locus1
-	const AlleleBitmapElement *pA1 = locus1->alleles.pBitMap;
+	const AlleleBitmapElement *pA1;
 	// A pointer to the allele information for the locus2
-	const AlleleBitmapElement *pA2 = locus2->alleles.pBitMap;
+	const AlleleBitmapElement *pA2;
 
 	// override the initial (incorrectly values) of p1/p2 values if we are dealing with a pointer in
 	// pA1/pA2.
 	if (numBits > NUM_BITS_PER_ALLELE_ELEMENT)
 	{
+		pA1 = locus1->alleles.pBitMap;
+		pA2 = locus2->alleles.pBitMap;
+
 		p1 = *pA1;
 		p2 = *pA2;
+	}
+	else
+	{
+		p1 = locus1->alleles.bitMap;
+		p2 = locus2->alleles.bitMap;
 	}
 
 	for (unsigned short i = 0; i < numBits; i++)
@@ -220,9 +228,9 @@ unsigned short numAlleles(const char *locusLine)
 	return numAlleles;
 }
 
-/// @brief Parses a input file line into a Locus structure
+/// @brief Parses an input file line into a Locus structure
 /// @param locusLine Locus line from input file
-//  @param allele_location Where to store the allele bitmap (can be NULL)
+/// @param allele_location Where to store the allele bitmap (can be NULL)
 /// @return 
 Locus parseLocus(const char *locusLine, AlleleBitmapElement *allele_location)
 {
