@@ -252,7 +252,7 @@ Locus parseLocus(const char *locusLine, AlleleBitmapElement *allele_location)
 	AlleleBitmapElement *pAllele = allele_location ? allele_location : &(locus.alleles.bitMap);
 	*pAllele = 0;
 
-	unsigned short numAlleles;
+	unsigned short numAlleles = 0;
 	for (; *p; p++)
 	{
 		if (*p == '0' || *p == '1')
