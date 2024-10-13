@@ -529,7 +529,12 @@ InputFileInfo ReadInputFile(const char *fileName)
 	// Read in the first line to determine the number of
 	// alleles for this file.
 	//----
-	fgets(line, sizeof(line), file);
+	char *read_line = fgets(line, sizeof(line), file);
+	if (!read_line)
+	{
+		fprintf(stderr, "Unable to read first line of file?\nAborting.\n");
+		exit(-1);
+	}
 	fileInfo.num_alleles = numAlleles(line);
 
 	rewind(file);
