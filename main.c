@@ -35,6 +35,7 @@ typedef unsigned long long AlleleBitmapElement;
 //----
 static unsigned char l_no_output = 0;			// -n
 static unsigned short l_num_threads = 1;		// -j <num>
+static unsigned char l_ignore_bad_input = 0;    // -g
 
 // defines the maximum number of matching indices we can store in a LocusMatches structure.
 #define LOCUS_INDEX_CHUNK		(1024)
@@ -338,6 +339,7 @@ typedef struct
 	AlleleBitmapElement *alleles;
 	unsigned long		num_loci;
 	unsigned short		num_alleles;
+	unsigned long		num_bad_lines;
 } InputFileInfo;
 
 #define IS_INPUT_VALID(input_file_info)		(input_file_info.loci != NULL)
@@ -477,6 +479,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 	fileInfo.alleles = NULL;
 	fileInfo.num_loci = 0;
 	fileInfo.num_alleles = 0;
+	fileInfo.num_bad_lines = 0;
 
 	//----
 	// If filename is unspecified, bail.
@@ -569,6 +572,22 @@ InputFileInfo ReadInputFile(const char *fileName)
 		/* note that fgets don't strip the terminating \n, checking its
 		   presence would allow to handle lines longer that sizeof(line) */
 
+
+		// check to ensure that the number of alleles are consistent.
+		if (numAlleles(line) != fileInfo.num_alleles)
+		{
+			fprintf(stderr, "*** Inconsistent number of alleles on line [%s]\n", line);
+			if (!l_ignore_bad_input)
+			{
+				exit(-1);
+			}
+			else
+			{
+				fileInfo.num_bad_lines++;
+				continue;
+			}
+		}
+
 		// this should bit copy the parsed Locus structure into our array of
 		// loci.
 		samples[ns] = parseLocus(line, fileInfo.alleles ? &(fileInfo.alleles[ns * numElementsRequired]) : NULL);
@@ -596,6 +615,7 @@ int main(int argc, char* argv[])
 	// Handle command line options
 	// -n = no output
 	// -j <num> = number of threads to launch -- set to number of cores in processor for optimal results.
+	// -g = ignore bad input lines rather than halt
 	//----
     int c;
     extern char *optarg;
@@ -603,13 +623,16 @@ int main(int argc, char* argv[])
 
     opterr = 0; // disable error messages
 
-    while ((c = getopt(argc, argv, "nj:")) != -1) {
+    while ((c = getopt(argc, argv, "ngj:")) != -1) {
         switch (c) {
 			case 'n':
 				l_no_output = 1;
 				break;
 			case 'j':
 				l_num_threads = atoi(optarg);
+				break;
+			case 'g':
+				l_ignore_bad_input = 1;
 				break;
 			case '?':
 				printf("Unknown option %c\n", optopt);
@@ -626,8 +649,11 @@ int main(int argc, char* argv[])
 	//----
 	// Read the input files specified on the command line
 	//----
-	InputFileInfo file1 = ReadInputFile(argv[optind]);
-	InputFileInfo file2 = ReadInputFile(argc >= optind + 1 ? argv[optind + 1] : NULL);
+	const char *file1Name = argv[optind];
+	const char *file2Name = argc >= optind + 1 ? argv[optind + 1] : NULL;
+
+	InputFileInfo file1 = ReadInputFile(file1Name);
+	InputFileInfo file2 = ReadInputFile(file2Name);
 
 	//----
 	// Check if the two files match up with number of alleles
@@ -753,6 +779,17 @@ int main(int argc, char* argv[])
 	gettimeofday(&t1, NULL);
 	elapsed = (double)(t1.tv_usec - t0.tv_usec) / 1000000 + (double)(t1.tv_sec - t0.tv_sec);
 	fprintf(stderr, "\nElapsed time to write results: %f seconds\n", elapsed);
+
+	if (file1.num_bad_lines > 0)
+	{
+		fprintf(stderr, "*** Found %ld bad lines in input file %s\n", file1.num_bad_lines, file1Name);		
+	}
+
+	if (IS_INPUT_VALID(file2) && file2.num_bad_lines > 0)
+	{
+		fprintf(stderr, "*** Found %ld bad lines in input file %s\n", file2.num_bad_lines, file2Name);
+	}
+
 
 	fprintf(stderr, "\nFound %ld sample matches\n", uniques);
 
