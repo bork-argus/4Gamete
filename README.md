@@ -1,6 +1,13 @@
 4Gamete analyzes DNA input to find loci pairs with all four bit patterns
 between them.
 
+```
+4Gamete [-n] [-j <num>] [-g]
+	-n = no output
+	-j <num> = number of threads to launch -- set to number of cores in processor for optimal results.
+	-g = ignore bad input lines rather than halt
+```
+
 It is capable of using multi-processors to speed up comparisons and
 can handle different size loci.
 
