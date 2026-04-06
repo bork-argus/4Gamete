@@ -8,9 +8,6 @@ between them.
 	-g = ignore bad input lines rather than halt
 ```
 
-It is capable of using multi-processors to speed up comparisons and
-can handle different size loci.
-
 Input files look like:
 ```
 BE017350.1_124 0 0 0 0 0 0 0 1 1 1 0 0 1 1 0 1 0 0 0 1 0 1 0 1
