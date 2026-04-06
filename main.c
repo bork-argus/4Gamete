@@ -500,20 +500,65 @@ InputFileInfo ReadInputFile(const char *fileName)
 	}
 
 	//----
-	// This will break if any lines in the input file are greater than
-	// MAX_LINE_LENGTH. If that happens, raise MAX_LINE_LENGTH and
-	// recompile.
+	// Read the file entirely in one character at a time to
+	// determine:
+	//   - tha longest line in the file
+	//   - the number of loci
 	//----
-	char line[MAX_LINE_LENGTH];
-
-	//----
-	// read in the file, discarding the contents as we go.
-	// We are only interested in the number of records in the
-	// file at this point.
-	//----
+	int c;
 	unsigned long numLoci = 0;
-	while (fgets(line, sizeof(line), file))
-		numLoci++;
+	unsigned long max_line_length = 0;
+	unsigned long current_line_length = 0;
+	while ((c = fgetc(file)) != EOF)
+	{
+		char is_eol = 0;
+
+		// Unix
+		if (c == '\n')
+			is_eol = 1;
+		
+		// DOS/OSX
+		else if (c == '\r')
+		{
+			//----
+			// Check the next character in case this is DOS
+			// EOL.
+			//----
+			c = fgetc(file);
+			if (c != '\n') {
+				ungetc(c, file); // Push back if not part of \r\n
+			}
+			else
+				current_line_length++; // add another character for DOS EOL
+
+			is_eol = 1; // Mac or DOS EOL
+		}
+
+		//----
+		// If we stumbled across an end-of-line
+		//  Add one to numLoci
+		//  Keep track of the longest line we've seen in the file.
+		//----
+		current_line_length++;
+		if (is_eol)
+		{
+			numLoci++;
+			if (max_line_length < current_line_length)
+				max_line_length = current_line_length;
+
+			current_line_length = 0;
+		}
+	}
+
+	max_line_length++; // Add in one more character for NULL termination, if needed.
+
+	// fprintf(stderr, "Working with max line lengths of %ld characters and %ld locis.\n", max_line_length, numLoci);
+	char *line = (char *) malloc((size_t) max_line_length);
+	if (line == NULL)
+	{
+		fprintf(stderr, "Failed to allocate memory to read lines of %ld length. Aborting.\n", max_line_length);
+		exit(-1);
+	}
 
 	//----
 	// Allocate space enough for all the records in the file.
@@ -532,7 +577,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 	// Read in the first line to determine the number of
 	// alleles for this file.
 	//----
-	char *read_line = fgets(line, sizeof(line), file);
+	char *read_line = fgets(line, max_line_length, file);
 	if (!read_line)
 	{
 		fprintf(stderr, "Unable to read first line of file?\nAborting.\n");
@@ -567,7 +612,7 @@ InputFileInfo ReadInputFile(const char *fileName)
 		}
 	}
 
-	while (fgets(line, sizeof(line), file)) 
+	while (fgets(line, max_line_length, file)) 
 	{
 		/* note that fgets don't strip the terminating \n, checking its
 		   presence would allow to handle lines longer that sizeof(line) */
@@ -601,6 +646,11 @@ InputFileInfo ReadInputFile(const char *fileName)
 	   timeout for instance */
 
 	fclose(file);
+
+	//----
+	// Free the temporary storage for reading in the lines.
+	//----
+	free(line);
 
 	return fileInfo;
 }
