@@ -25,7 +25,7 @@ BE017350.1_767 0 1 0 0 1 0 0 0 0 0 1 1 0 0 1 0 0 1 1 0 1 0 1 0
 BE017350.1_839 1 1 1 1 1 1 0 0 0 0 1 1 0 0 1 0 1 1 1 0 1 0 1 0
 ```
 Rows with missing data (. or *) will halt the program unless the `-g` flag is 
-used in which case that locus will not be processed.
+used; in which case that locus will not be processed.
 
 This format can easily be achieved using the program bcftools (not included):
 
