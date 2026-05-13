@@ -146,7 +146,7 @@ unsigned short uniquePairsViaLocus(const Locus *locus1, const Locus *locus2, con
 		case 0x0:
 			break;
 
-		// Cases where exactly 1 bit is set
+		// Cases where exactly 1 bit is set (indicates monomorphic sites in data which likely shouldn't be there)
 		case 0x01:
 		case 0x02:
 		case 0x04:
@@ -835,9 +835,24 @@ int main(int argc, char* argv[])
 
 	if (!IS_INPUT_VALID(file2))
 	{
+		//----
+		// Total combinations = num_loci choose 2 (nC2)
+		//----
 		double matching_percentage = (((double) uniques * 2) / (((double) file1.num_loci) * ((double) file1.num_loci - 1))) * 100;
 		fprintf(stderr, "Matching percentage: %.3f%%\n", matching_percentage);
+		fprintf(stderr, "Total possible pairs: %ld\n", (((double) file1.num_loci) * ((double) file1.num_loci - 1)));
 	}
+
+	if (IS_INPUT_VALID(file2))
+	{
+		//----
+		// Total combinations for between 2 files is the num_loci in file1 x num_loci in file2
+		//----
+		double matching_percentage = (((double) uniques) / (((double) file1.num_loci) * ((double) file2.num_loci))) * 100;
+		fprintf(stderr, "Matching percentage: %.3f%%\n", matching_percentage);
+		fprintf(stderr, "Total possible pairs: %ld (%ld x %ld)\n", (((double) file1.num_loci) * ((double) file2.num_loci)), ((double) file1.num_loci), ((double) file2.num_loci));
+	}
+
 
 	fprintf(stderr, "\n");
 
